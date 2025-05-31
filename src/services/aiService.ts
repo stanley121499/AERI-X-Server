@@ -3,7 +3,6 @@ import { Database } from "../database.types";
 import { 
   fetchAllWallets,
   fetchWalletByName,
-  createWallet
 } from "../db/wallets";
 import { 
   fetchAllWalletBalances 
@@ -202,6 +201,60 @@ export class AIService {
   }
 
   /**
+   * Calculate string similarity using Levenshtein distance
+   * @param str1 - First string
+   * @param str2 - Second string
+   * @returns Similarity ratio between 0 and 1
+   */
+  private calculateStringSimilarity(str1: string, str2: string): number {
+    const longer = str1.length > str2.length ? str1 : str2;
+    const shorter = str1.length > str2.length ? str2 : str1;
+    
+    if (longer.length === 0) {
+      return 1.0;
+    }
+    
+    const editDistance = this.levenshteinDistance(longer, shorter);
+    return (longer.length - editDistance) / longer.length;
+  }
+
+  /**
+   * Calculate Levenshtein distance between two strings
+   * @param str1 - First string
+   * @param str2 - Second string
+   * @returns Edit distance
+   */
+  private levenshteinDistance(str1: string, str2: string): number {
+    const matrix = Array(str2.length + 1).fill(null).map(() => 
+      Array(str1.length + 1).fill(null)
+    );
+    
+    for (let i = 0; i <= str1.length; i++) {
+      matrix[0][i] = i;
+    }
+    
+    for (let j = 0; j <= str2.length; j++) {
+      matrix[j][0] = j;
+    }
+    
+    for (let j = 1; j <= str2.length; j++) {
+      for (let i = 1; i <= str1.length; i++) {
+        if (str1[i - 1] === str2[j - 1]) {
+          matrix[j][i] = matrix[j - 1][i - 1];
+        } else {
+          matrix[j][i] = Math.min(
+            matrix[j - 1][i - 1] + 1, // substitution
+            matrix[j][i - 1] + 1,     // insertion
+            matrix[j - 1][i] + 1      // deletion
+          );
+        }
+      }
+    }
+    
+    return matrix[str2.length][str1.length];
+  }
+
+  /**
    * Extract important financial details from conversation history
    * @param conversationHistory - Previous conversation messages
    * @returns String of extracted financial details
@@ -214,26 +267,43 @@ export class AIService {
     // Keywords and patterns to look for
     const financialPatterns = [
       // Income patterns
-      { pattern: /salary|income|earn|pay(check|day)|get paid/i, category: "Income" },
-      { pattern: /(day|date|every|each|[0-9]+)(st|nd|rd|th)? (of )?(\w+ )?(month|week|fortnight|bi-weekly)/i, category: "Payment Schedule" },
-      { pattern: /[0-9]+(?:st|nd|rd|th)?(?=\s+(?:of\s+)?(?:january|february|march|april|may|june|july|august|september|october|november|december))/i, category: "Payment Date" },
-      { pattern: /(?:january|february|march|april|may|june|july|august|september|october|november|december)\s+[0-9]+(?:st|nd|rd|th)?/i, category: "Payment Date" },
+      { pattern: /salary|income|earn|pay(check|day)|get paid/i, category: "Income", weight: 3 },
+      { pattern: /(day|date|every|each|[0-9]+)(st|nd|rd|th)? (of )?(\w+ )?(month|week|fortnight|bi-weekly)/i, category: "Payment Schedule", weight: 3 },
+      { pattern: /[0-9]+(?:st|nd|rd|th)?(?=\s+(?:of\s+)?(?:january|february|march|april|may|june|july|august|september|october|november|december))/i, category: "Payment Date", weight: 3 },
+      { pattern: /(?:january|february|march|april|may|june|july|august|september|october|november|december)\s+[0-9]+(?:st|nd|rd|th)?/i, category: "Payment Date", weight: 3 },
       
       // Expense patterns
-      { pattern: /rent|mortgage|bill|subscription|payment/i, category: "Recurring Expense" },
-      { pattern: /due (date|on)|deadline|by the/i, category: "Payment Deadline" },
+      { pattern: /rent|mortgage|bill|subscription|payment/i, category: "Recurring Expense", weight: 3 },
+      { pattern: /due (date|on)|deadline|by the/i, category: "Payment Deadline", weight: 2 },
       
-      // Financial goals
-      { pattern: /save|saving|budget|goal|target|plan/i, category: "Financial Goal" },
+      // Financial goals and planning
+      { pattern: /save|saving|budget|goal|target|plan/i, category: "Financial Goal", weight: 2 },
+      { pattern: /emergency fund|rainy day|backup/i, category: "Emergency Planning", weight: 3 },
       
-      // Financial constraints
-      { pattern: /debt|loan|credit|owe|borrow/i, category: "Debt" },
-      { pattern: /limit|restrict|cut( down)?|reduce/i, category: "Spending Constraint" }
+      // Financial constraints and debt
+      { pattern: /debt|loan|credit|owe|borrow/i, category: "Debt", weight: 3 },
+      { pattern: /limit|restrict|cut( down)?|reduce/i, category: "Spending Constraint", weight: 2 },
+      
+      // Currency and amounts
+      { pattern: /(\$|USD|MYR|RM|€|£)[0-9,]+(\.[0-9]{2})?/i, category: "Amount Mentioned", weight: 2 },
+      { pattern: /[0-9,]+(\.[0-9]{2})?\s*(dollars?|ringgit|MYR|USD)/i, category: "Amount Mentioned", weight: 2 },
+      
+      // Financial advice requests
+      { pattern: /(do i have|can i afford|should i buy|worth buying)/i, category: "Financial Decision", weight: 2 },
+      { pattern: /(help me|advice|recommend|suggest).*?(financial|money|budget)/i, category: "Advice Request", weight: 2 }
     ];
     
-    // Extract relevant financial information from conversation
-    let extractedDetails = "IMPORTANT FINANCIAL DETAILS FROM CONVERSATION:\n";
+    // Extract relevant financial information from conversation with context
+    let extractedDetails = "CONVERSATION CONTEXT AND FINANCIAL DETAILS:\n";
     let detailsFound = false;
+    let previousTopics = new Set<string>();
+    
+    // Analyze the full conversation flow
+    const conversationSummary = this.summarizeConversationFlow(conversationHistory);
+    if (conversationSummary) {
+      extractedDetails += `\nCONVERSATION FLOW SUMMARY:\n${conversationSummary}\n`;
+      detailsFound = true;
+    }
     
     conversationHistory.forEach((message, index) => {
       if (message.role === "user") {
@@ -244,12 +314,22 @@ export class AIService {
         
         if (matches.length > 0) {
           detailsFound = true;
-          extractedDetails += `- User mentioned: "${message.content}"\n`;
-          extractedDetails += `  Categories: ${matches.map(m => m.category).join(", ")}\n`;
+          
+          // Calculate importance score
+          const importanceScore = matches.reduce((sum, match) => sum + match.weight, 0);
+          const isHighImportance = importanceScore >= 5;
+          
+          extractedDetails += `${isHighImportance ? "⭐ HIGH PRIORITY" : "📝"} User Message #${index + 1}: "${message.content}"\n`;
+          extractedDetails += `   Detected Categories: ${matches.map(m => m.category).join(", ")}\n`;
+          extractedDetails += `   Importance Score: ${importanceScore}\n`;
+          
+          // Track topics mentioned
+          matches.forEach(match => previousTopics.add(match.category));
           
           // If we have an assistant response following this, include it for context
           if (index + 1 < conversationHistory.length && conversationHistory[index + 1].role === "assistant") {
-            extractedDetails += `  Your response: "${conversationHistory[index + 1].content.substring(0, 100)}..."\n`;
+            const assistantResponse = conversationHistory[index + 1].content;
+            extractedDetails += `   My Previous Response: "${assistantResponse.substring(0, 150)}${assistantResponse.length > 150 ? "..." : ""}"\n`;
           }
           
           extractedDetails += "\n";
@@ -257,7 +337,67 @@ export class AIService {
       }
     });
     
+    // Add summary of recurring topics
+    if (previousTopics.size > 0) {
+      extractedDetails += `RECURRING TOPICS IN CONVERSATION: ${Array.from(previousTopics).join(", ")}\n\n`;
+    }
+    
+    // Add guidance for conversation continuity
+    if (detailsFound) {
+      extractedDetails += "IMPORTANT: Use this conversation context to:\n";
+      extractedDetails += "- Reference previous information instead of asking again\n";
+      extractedDetails += "- Build upon previously discussed topics\n";
+      extractedDetails += "- Maintain conversation continuity\n";
+      extractedDetails += "- Avoid repeating advice or creating duplicate notes\n\n";
+    }
+    
     return detailsFound ? extractedDetails : "";
+  }
+
+  /**
+   * Summarize the conversation flow to understand the user's journey
+   * @param conversationHistory - Previous conversation messages
+   * @returns Summary of conversation flow
+   */
+  private summarizeConversationFlow(conversationHistory: ConversationMessage[]): string {
+    if (!conversationHistory || conversationHistory.length === 0) {
+      return "";
+    }
+    
+    const userMessages = conversationHistory
+      .filter(msg => msg.role === "user")
+      .map((msg, index) => ({ index: index + 1, content: msg.content }));
+    
+    if (userMessages.length === 0) {
+      return "";
+    }
+    
+    let summary = `User has made ${userMessages.length} request(s) in this conversation:\n`;
+    
+    userMessages.forEach((msg, index) => {
+      const preview = msg.content.length > 80 ? 
+        msg.content.substring(0, 80) + "..." : 
+        msg.content;
+      summary += `${index + 1}. "${preview}"\n`;
+    });
+    
+    // Identify conversation patterns
+    const topics = new Set<string>();
+    const keywords = ["debt", "salary", "rent", "budget", "money", "afford", "buy", "save", "plan"];
+    
+    userMessages.forEach(msg => {
+      keywords.forEach(keyword => {
+        if (msg.content.toLowerCase().includes(keyword)) {
+          topics.add(keyword);
+        }
+      });
+    });
+    
+    if (topics.size > 0) {
+      summary += `Main topics discussed: ${Array.from(topics).join(", ")}\n`;
+    }
+    
+    return summary;
   }
 
   /**
@@ -435,7 +575,7 @@ export class AIService {
             // Create the note with the data
             await createFinancialNote(action.data);
             console.log("Financial note created:", action.data.note);
-            responses.push(action.message || "Financial note created successfully.");
+            responses.push(action.message ?? "Financial note created successfully.");
             break;
             
           case ActionType.UPDATE_NOTE:
@@ -616,6 +756,8 @@ You act as the user's personal financial advisor, helping them make informed dec
 Your goal is to help the user to steadily improve their financial situation.
 Your job is to analyze the user's request in relation to their financial data and provide helpful, actionable advice that considers their complete financial picture.
 
+CRITICAL: This is a CONTINUING CONVERSATION. You must maintain context and build upon previous discussions. DO NOT treat each message as an isolated interaction.
+
 TODAY'S DATE: ${new Date().toLocaleDateString()}
 
 DATABASE CONTEXT:
@@ -623,17 +765,48 @@ ${dataContext}
 
 ${dbData.extractedDetails ? dbData.extractedDetails : ""}
 
-INSTRUCTIONS:
-1. Analyze the user's request in relation to the provided financial data.
-2. Provide clear, specific advice based on their current financial situation.
-3. IMPORTANT: Create a financial note when the user shares NEW important financial information such as:
-   - Income sources and payment schedules (salary dates, recurring income)
-   - Financial goals (saving targets, major purchases)
-   - Regular expense patterns (rent/mortgage dates, bill due dates)
-   - Financial constraints or concerns
-4. Respond directly to questions about affordability, budgeting, and financial decisions.
-5. Return your response as a JSON object with an "actions" array.
-6. IMPORTANT: Pay close attention to the conversation history to identify important financial details the user has shared previously. Reference and incorporate this information in your analysis.
+CONVERSATION CONTINUITY RULES:
+1. Always reference relevant information from the conversation history when applicable
+2. Build upon previous advice instead of repeating it
+3. Use phrases like "As we discussed earlier..." or "Building on our previous conversation..." when relevant
+4. If the user asks about something already covered, acknowledge the previous discussion
+
+NOTE MANAGEMENT DECISION FRAMEWORK:
+5. CAREFULLY REVIEW ALL EXISTING FINANCIAL NOTES listed above before taking any note action
+6. Use this decision tree for note actions:
+   
+   CREATE_NOTE when:
+   - User shares completely NEW financial information not covered in existing notes
+   - User mentions a NEW income source, payment date, or financial schedule
+   - User reveals NEW financial goals, constraints, or major life changes
+   - User provides NEW specific amounts, dates, or financial details
+   
+   UPDATE_NOTE when:
+   - User provides updated information that changes existing note content
+   - Previous information becomes outdated or incorrect
+   - User adds important details to previously discussed topics
+   - You need to modify an existing note with new context
+   
+   DELETE_NOTE when:
+   - User explicitly says previous information is no longer relevant
+   - Financial circumstances have changed making old notes obsolete
+   - User corrects misinformation that was previously recorded
+   
+   NO NOTE ACTION (just respond) when:
+   - Information is already well-documented in existing notes
+   - User is asking questions about previously discussed topics
+   - You're providing analysis based on existing data
+   - User is repeating information already captured
+
+7. If you reference existing notes in your response, be specific about which note you're referencing
+8. When creating notes, be specific and actionable - include relevant context that will help in future conversations
+
+ANALYSIS INSTRUCTIONS:
+1. Analyze the user's request in relation to the provided financial data AND conversation history
+2. Provide clear, specific advice based on their current financial situation AND previous discussions
+3. Reference specific numbers from their wallet balances, transactions, and notes
+4. Consider their previously mentioned financial constraints, goals, and schedules
+5. Return your response as a JSON object with an "actions" array
 
 Each action in the array should have:
 - "type": The type of action to perform (create_note, update_note, delete_note, respond)
@@ -646,46 +819,81 @@ For financial notes, include:
 - related_wallet_id: string (if applicable, can be omitted if not relevant)
 - context: object (any additional context as a JSON object, always include at least some basic context)
 
-IMPORTANT: Focus on creating notes that capture CRITICAL financial details rather than creating a note for every interaction.
-IMPORTANT: Note creation does NOT require UUIDs. The system will handle creating the IDs automatically. Just provide the note text and optional related information.
+RESPONSE STYLE GUIDELINES:
+- Be conversational and refer to previous discussions
+- Use specific data from their financial situation
+- Provide actionable, personalized advice
+- Show continuity in your financial guidance
+- Acknowledge progress or changes since previous conversations
 
-For example, if the user mentions "my salary comes in on the 7th of every month" or "I pay rent on the 1st", 
-ALWAYS create a note to record this important financial schedule. This information should be referenced in future analyses.
+EXAMPLE CONVERSATION-AWARE RESPONSE:
+{
+  "actions": [
+    {
+      "type": "respond",
+      "data": null,
+      "message": "Based on our previous discussion about your 100k MYR debt and the 1,600 MYR monthly rent and utilities we calculated, I can see you're still working on the budgeting plan we outlined. With your current total balance of 570 MYR across both wallets, and knowing your salary schedule, you'll need to be very strategic about this purchase. As I mentioned before, prioritizing debt payments while covering essential expenses is crucial right now."
+    }
+  ]
+}
 
-When responding to questions like "Do I have money for X?" or "Should I buy X?":
-1. Check their wallet balances to determine if they have sufficient funds
-2. Analyze their spending patterns in related categories
-3. Reference important dates like their salary schedule, rent dates, or bill payments
-4. Provide specific advice about the purchase based on their financial situation
-5. Include relevant context about their overall financial health
-6. Reference previous advice or discussions from the conversation history when applicable
+EXAMPLE WHEN EXISTING NOTE COVERS THE TOPIC:
+{
+  "actions": [
+    {
+      "type": "respond",
+      "data": null,
+      "message": "I see you're asking about your debt situation again. As noted in my records: 'User has significant debt (100k MYR) with monthly rent and utilities of 1.6k MYR. Monthly income is 4k MYR.' The budgeting strategy we discussed previously still applies - would you like me to help you implement specific aspects of that plan or address any new concerns?"
+    }
+  ]
+}
 
-EXAMPLE FINANCIAL DETAIL NOTE:
+EXAMPLE FOR GENUINELY NEW INFORMATION:
 {
   "actions": [
     {
       "type": "create_note",
       "data": {
-        "note": "User receives salary on the 7th of each month. Important for cash flow planning.",
-        "context": { "detail_type": "income_schedule", "income_type": "salary", "day_of_month": 7 }
+        "note": "User's employer has changed salary payment date from 7th to 15th of each month. This affects cash flow planning significantly.",
+        "context": { "detail_type": "schedule_change", "previous_date": 7, "new_date": 15, "change_type": "salary_schedule" }
       },
-      "message": "I've recorded your salary schedule."
+      "message": "I've updated my records with your new salary schedule."
     },
     {
       "type": "respond",
       "data": null,
-      "message": "I'll keep in mind that your salary arrives on the 7th of each month when providing financial advice."
+      "message": "This salary date change from the 7th to the 15th will significantly impact your cash flow planning. Let me help you adjust your budget timeline accordingly..."
     }
   ]
 }
 
-EXAMPLE ADVICE RESPONSE:
+EXAMPLE FOR UPDATING EXISTING INFORMATION:
+{
+  "actions": [
+    {
+      "type": "update_note",
+      "data": {
+        "id": "existing-note-uuid-here",
+        "note": "User has 100k MYR debt (updated from previous estimate). Monthly expenses: rent and utilities 1.6k MYR. Salary: 4k MYR monthly, paid on 7th. Urgent need for debt management plan.",
+        "context": { "detail_type": "debt_update", "previous_amount": "estimated", "confirmed_amount": "100k MYR" }
+      },
+      "message": "I've updated your financial profile with the confirmed debt amount."
+    },
+    {
+      "type": "respond", 
+      "data": null,
+      "message": "Now that I have the confirmed debt amount of 100k MYR, let me revise the debt management strategy we discussed..."
+    }
+  ]
+}
+
+EXAMPLE FOR REFERENCING EXISTING NOTES (NO NOTE ACTION):
 {
   "actions": [
     {
       "type": "respond",
       "data": null,
-      "message": "Looking at your current wallet balance of $320 and noting that your salary won't arrive for another 16 days (on the 7th), spending $20 daily on food would deplete your funds before your next paycheck. I recommend limiting your food spending to $10-15 per day for the next 16 days, which would leave you with some emergency funds while still allowing for adequate meals."
+      "message": "Based on the financial profile I have on record - your 100k MYR debt, 4k MYR monthly salary (paid on the 7th), and 1.6k MYR monthly expenses for rent and utilities - you have about 2.4k MYR available monthly for debt payments and other expenses. As we discussed in our previous conversation, the priority should be..."
     }
   ]
 }

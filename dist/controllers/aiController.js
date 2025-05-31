@@ -31,13 +31,13 @@ class AIController {
     processPrompt(req, res) {
         return __awaiter(this, void 0, void 0, function* () {
             try {
-                const { prompt } = req.body;
+                const { prompt, conversationHistory = [] } = req.body;
                 if (!prompt) {
                     res.status(400).json({ error: "Missing prompt" });
                     return;
                 }
                 // First, process the prompt for CRUD operations
-                const crudResponse = yield this.aiService.processCrudOperations(prompt);
+                const crudResponse = yield this.aiService.processCrudOperations(prompt, conversationHistory);
                 // Check if we need to escalate to financial analysis
                 const shouldEscalate = crudResponse.actions.length === 1 &&
                     crudResponse.actions[0].type === "respond" &&
@@ -53,24 +53,38 @@ class AIController {
                 if (shouldEscalate) {
                     console.log("Escalating to financial analysis:", prompt);
                     // Call the financial analysis function
-                    const analysisResponse = yield this.aiService.processFinancialAnalysis(prompt);
+                    const analysisResponse = yield this.aiService.processFinancialAnalysis(prompt, conversationHistory);
                     // Execute the actions and get the response
                     const responseMessage = yield this.aiService.executeActions(analysisResponse.actions);
+                    // Add the assistant's response to the conversation history
+                    const updatedHistory = [
+                        ...conversationHistory,
+                        { role: "user", content: prompt },
+                        { role: "assistant", content: responseMessage }
+                    ];
                     // Return the response
                     res.json({
                         success: true,
                         message: responseMessage,
-                        actions: analysisResponse.actions
+                        actions: analysisResponse.actions,
+                        conversationHistory: updatedHistory
                     });
                     return;
                 }
                 // Execute the CRUD actions and get the response
                 const responseMessage = yield this.aiService.executeActions(crudResponse.actions);
+                // Add the assistant's response to the conversation history
+                const updatedHistory = [
+                    ...conversationHistory,
+                    { role: "user", content: prompt },
+                    { role: "assistant", content: responseMessage }
+                ];
                 // Return the response
                 res.json({
                     success: true,
                     message: responseMessage,
-                    actions: crudResponse.actions
+                    actions: crudResponse.actions,
+                    conversationHistory: updatedHistory
                 });
             }
             catch (error) {

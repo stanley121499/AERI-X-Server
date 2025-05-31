@@ -154,52 +154,6 @@ class AIService {
         });
     }
     /**
-     * Check if a similar note already exists to prevent duplicates
-     * @param newNoteContent - Content of the new note to check
-     * @param existingNotes - Array of existing financial notes
-     * @returns Existing note if found, null otherwise
-     */
-    findSimilarNote(newNoteContent, existingNotes) {
-        if (!existingNotes || existingNotes.length === 0) {
-            return null;
-        }
-        const normalizedNewContent = newNoteContent.toLowerCase().trim();
-        // Define patterns to check for note similarity
-        const patterns = [
-            // Debt-related patterns
-            { pattern: /debt|loan|owe/i, keywords: ["debt", "loan", "owe", "borrow"] },
-            // Income/salary patterns
-            { pattern: /salary|income|earn|pay/i, keywords: ["salary", "income", "earn", "pay"] },
-            // Expense patterns
-            { pattern: /rent|mortgage|bill/i, keywords: ["rent", "mortgage", "bill", "expense"] },
-            // Goal patterns
-            { pattern: /goal|target|save|plan/i, keywords: ["goal", "target", "save", "plan"] }
-        ];
-        for (const existingNote of existingNotes) {
-            const normalizedExisting = existingNote.note.toLowerCase().trim();
-            // Check for exact or very similar content (80% similarity)
-            if (this.calculateStringSimilarity(normalizedNewContent, normalizedExisting) > 0.8) {
-                return existingNote;
-            }
-            // Check for pattern-based similarity (same financial topic)
-            for (const pattern of patterns) {
-                if (pattern.pattern.test(newNoteContent) && pattern.pattern.test(existingNote.note)) {
-                    // Both notes match the same pattern, check if they contain similar keywords
-                    const newKeywords = pattern.keywords.filter(keyword => normalizedNewContent.includes(keyword));
-                    const existingKeywords = pattern.keywords.filter(keyword => normalizedExisting.includes(keyword));
-                    // If they share multiple keywords, consider them similar
-                    if (newKeywords.length > 0 && existingKeywords.length > 0) {
-                        const sharedKeywords = newKeywords.filter(keyword => existingKeywords.includes(keyword));
-                        if (sharedKeywords.length > 0) {
-                            return existingNote;
-                        }
-                    }
-                }
-            }
-        }
-        return null;
-    }
-    /**
      * Calculate string similarity using Levenshtein distance
      * @param str1 - First string
      * @param str2 - Second string
@@ -366,6 +320,7 @@ class AIService {
      */
     executeActions(actions) {
         return __awaiter(this, void 0, void 0, function* () {
+            var _a;
             const responses = [];
             // Process all actions
             for (const action of actions) {
@@ -506,7 +461,7 @@ class AIService {
                             // Create the note with the data
                             yield (0, financial_notes_1.createFinancialNote)(action.data);
                             console.log("Financial note created:", action.data.note);
-                            responses.push(action.message || "Financial note created successfully.");
+                            responses.push((_a = action.message) !== null && _a !== void 0 ? _a : "Financial note created successfully.");
                             break;
                         case ActionType.UPDATE_NOTE:
                             yield (0, financial_notes_1.updateFinancialNote)(action.data.id, action.data);

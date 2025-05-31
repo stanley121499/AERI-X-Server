@@ -56,10 +56,16 @@ class AIController {
                     const analysisResponse = yield this.aiService.processFinancialAnalysis(prompt, conversationHistory);
                     // Execute the actions and get the response
                     const responseMessage = yield this.aiService.executeActions(analysisResponse.actions);
+                    // Check if the current prompt is already the last message in conversation history
+                    const lastMessage = conversationHistory[conversationHistory.length - 1];
+                    const isPromptAlreadyInHistory = lastMessage &&
+                        lastMessage.role === "user" &&
+                        lastMessage.content === prompt;
                     // Add the assistant's response to the conversation history
                     const updatedHistory = [
                         ...conversationHistory,
-                        { role: "user", content: prompt },
+                        // Only add the user message if it's not already there
+                        ...(isPromptAlreadyInHistory ? [] : [{ role: "user", content: prompt }]),
                         { role: "assistant", content: responseMessage }
                     ];
                     // Return the response
@@ -73,10 +79,16 @@ class AIController {
                 }
                 // Execute the CRUD actions and get the response
                 const responseMessage = yield this.aiService.executeActions(crudResponse.actions);
+                // Check if the current prompt is already the last message in conversation history
+                const lastMessage = conversationHistory[conversationHistory.length - 1];
+                const isPromptAlreadyInHistory = lastMessage &&
+                    lastMessage.role === "user" &&
+                    lastMessage.content === prompt;
                 // Add the assistant's response to the conversation history
                 const updatedHistory = [
                     ...conversationHistory,
-                    { role: "user", content: prompt },
+                    // Only add the user message if it's not already there
+                    ...(isPromptAlreadyInHistory ? [] : [{ role: "user", content: prompt }]),
                     { role: "assistant", content: responseMessage }
                 ];
                 // Return the response
